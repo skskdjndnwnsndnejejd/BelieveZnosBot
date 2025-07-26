@@ -1,0 +1,208 @@
+import telebot
+from telebot import types
+import sqlite3
+from datetime import datetime, timedelta
+import random
+import time
+import smtplib
+from email.message import EmailMessage
+
+API_TOKEN = '8405903813:AAEcF7nEldg6QewRtaKKwrFVjIe6ZoUt9kg'
+
+bot = telebot.TeleBot(API_TOKEN)
+
+# --- DATABASE ---
+conn = sqlite3.connect('znoz_users.db', check_same_thread=False)
+cursor = conn.cursor()
+
+cursor.execute('''
+CREATE TABLE IF NOT EXISTS users (
+    user_id INTEGER PRIMARY KEY,
+    sub_until TEXT,
+    used_promo_types TEXT
+)
+''')
+
+cursor.execute('''
+CREATE TABLE IF NOT EXISTS promo (
+    code TEXT PRIMARY KEY,
+    promo_type TEXT,
+    expires_at TEXT,
+    activations INTEGER,
+    duration_days INTEGER
+)
+''')
+
+PROMO_CODES = {
+    "XakePromo":     ("permanent", None, 1, 9999),
+    "TheBelieve":    ("weekly", None, 500, 7),
+    "SummerZn0z":    ("summer", "2025-08-31", 1000, 9999),
+    "БАБЫНДЫБУБУЗ":  ("permanent", None, 1, 9999),
+    "x1wy":          ("permanent", None, 1, 9999),
+    "requiem":       ("permanent", None, 30, 9999),
+    "newgen":        ("daily", None, 100, 1),
+    "hello":         ("daily", None, 999999, 1)
+}
+
+# Добавляем множество одноразовых навсегда промокодов
+for i in range(1, 51):
+    code = f"forever{i:02}"
+    PROMO_CODES[code] = ("permanent", None, 1, 9999)
+
+for code, (ptype, expires, activations, days) in PROMO_CODES.items():
+    cursor.execute("INSERT OR IGNORE INTO promo VALUES (?, ?, ?, ?, ?)", (code, ptype, expires, activations, days))
+conn.commit()
+
+main_kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
+main_kb.row("Жалоба", "Промо")
+main_kb.row("Подписка", "Задания")
+
+TO_EMAILS = [
+    "support@telegram.org",
+    "abuse@telegram.org",
+    "dmca@telegram.org"
+]
+
+SUBJECTS = [
+    "Нарушение условий Telegram",
+    "Жалоба на пользователя",
+    "Запрос на проверку аккаунта"
+]
+
+BODIES = [
+    "Здравствуйте, пользователь {target} нарушает правила. Прошу принять меры.",
+    "Пользователь {target} распространяет запрещённый контент. Прошу разобраться.",
+    "Данный аккаунт {target} ведёт себя недопустимо. Прошу заблокировать."
+]
+
+ACCOUNTS = [
+    {"email" : abdusamat414@gmail.com", "29082010ZNOZ": ""},
+    {"email": abdusamat424@gmail.com", "29082010ZNOZ": ""},
+    {"email": adadazx55@gmail.com", "29082010SNOS": ""},
+    {"email": "reportmailhost@gmail.com", "password": ""},
+    {"email": "autonoreplygov@gmail.com", "password": ""},
+    {"email": "casesdepartmentuk@gmail.com", "password": ""},
+    {"email": "civilreportsdept@gmail.com", "password": ""},
+    {"email": "teleadminalert@gmail.com", "password": ""},
+]
+
+# Жалобы
+complaints = {}
+
+def send_email(from_email, password, to_email, subject, body):
+    msg = EmailMessage()
+    msg['Subject'] = subject
+    msg['To'] = to_email
+    msg.set_content(body)
+    with smtplib.SMTP_SSL('smtp.gmail.com', 465) as smtp:
+        smtp.login(from_email, password)
+        smtp.send_message(msg)
+
+def mass_complaint(target):
+    for account in ACCOUNTS:
+        email = account['email']
+        password = account['password']
+        to = random.choice(TO_EMAILS)
+        subject = random.choice(SUBJECTS)
+        body = random.choice(BODIES).format(target=target)
+        time.sleep(random.randint(5, 10))
+        try:
+            send_email(email, password, to, subject, body)
+        except:
+            pass
+
+@bot.message_handler(commands=['start'])
+def start_msg(msg):
+    bot.send_message(msg.chat.id, "🔮 Добро пожаловать в Znoz бот.", reply_markup=main_kb)
+
+@bot.message_handler(func=lambda msg: msg.text == "Жалоба")
+def complaint_step1(msg):
+    cursor.execute("SELECT sub_until FROM users WHERE user_id = ?", (msg.from_user.id,))
+    row = cursor.fetchone()
+    if row and datetime.fromisoformat(row[0]) >= datetime.now():
+        complaints[msg.from_user.id] = {"step": 1}
+        bot.send_message(msg.chat.id, "✉️ Введите имя пользователя:")
+    else:
+        bot.send_message(msg.chat.id, "🚫 У вас нет активной подписки.")
+
+@bot.message_handler(func=lambda msg: complaints.get(msg.from_user.id, {}).get("step") == 1)
+def complaint_step2(msg):
+    complaints[msg.from_user.id]["username"] = msg.text.strip()
+    complaints[msg.from_user.id]["step"] = 2
+    bot.send_message(msg.chat.id, "🔎 Введите текст жалобы:")
+
+@bot.message_handler(func=lambda msg: complaints.get(msg.from_user.id, {}).get("step") == 2)
+def complaint_send(msg):
+    target = complaints[msg.from_user.id]["username"]
+    del complaints[msg.from_user.id]
+    bot.send_message(msg.chat.id, "🚀 Жалоба отправляется.")
+    mass_complaint(target)
+    bot.send_message(msg.chat.id, "✅ Отправлено на Telegram Support.")
+
+@bot.message_handler(func=lambda msg: msg.text == "Подписка")
+def subscription(msg):
+    kb = types.InlineKeyboardMarkup()
+    kb.add(types.InlineKeyboardButton("1 день - 50₽", callback_data="sub_1"))
+    kb.add(types.InlineKeyboardButton("7 дней - 150₽", callback_data="sub_7"))
+    kb.add(types.InlineKeyboardButton("30 дней - 300₽", callback_data="sub_30"))
+    kb.add(types.InlineKeyboardButton("Навсегда - 500₽", callback_data="sub_perm"))
+    bot.send_message(msg.chat.id, "💳 Выберите срок подписки:", reply_markup=kb)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("sub_"))
+def handle_sub_choice(call):
+    bot.answer_callback_query(call.id)
+    bot.send_message(call.message.chat.id, "💵 Оплата: @ownbelieve для покупки подписки.")
+
+@bot.message_handler(func=lambda msg: msg.text == "Задания")
+def tasks(msg):
+    bot.send_message(msg.chat.id, "📌 Заданий пока нет. Возвращайтесь позже!")
+
+@bot.message_handler(func=lambda msg: msg.text == "Промо")
+def promo_code_handler(msg):
+    bot.send_message(msg.chat.id, "🎁 Введите промокод:")
+    bot.register_next_step_handler(msg, apply_promo)
+
+def apply_promo(msg):
+    code = msg.text.strip()
+    cursor.execute("SELECT * FROM promo WHERE code = ?", (code,))
+    promo = cursor.fetchone()
+    if not promo:
+        bot.send_message(msg.chat.id, "❌ Промокод не найден.")
+        return
+
+    promo_type, expires_at, activations, duration_days = promo[1:]
+
+    if expires_at and datetime.fromisoformat(expires_at) < datetime.now():
+        bot.send_message(msg.chat.id, "⏰ Срок действия промокода истёк.")
+        return
+
+    cursor.execute("SELECT used_promo_types FROM users WHERE user_id = ?", (msg.from_user.id,))
+    row = cursor.fetchone()
+    used_types = row[0].split(',') if row and row[0] else []
+
+    if promo_type in used_types:
+        bot.send_message(msg.chat.id, "⚠️ Вы уже использовали промокод этого типа.")
+        return
+
+    cursor.execute("SELECT sub_until FROM users WHERE user_id = ?", (msg.from_user.id,))
+    row = cursor.fetchone()
+    now = datetime.now()
+    sub_until = datetime.fromisoformat(row[0]) if row and row[0] else now
+    new_sub_until = max(sub_until, now) + timedelta(days=duration_days)
+
+    if not row:
+        cursor.execute("INSERT INTO users (user_id, sub_until, used_promo_types) VALUES (?, ?, ?)",
+                       (msg.from_user.id, new_sub_until.isoformat(), promo_type))
+    else:
+        used_types.append(promo_type)
+        cursor.execute("UPDATE users SET sub_until = ?, used_promo_types = ? WHERE user_id = ?",
+                       (new_sub_until.isoformat(), ','.join(used_types), msg.from_user.id))
+
+    cursor.execute("UPDATE promo SET activations = activations - 1 WHERE code = ?", (code,))
+    conn.commit()
+    bot.send_message(msg.chat.id, f"✅ Промокод активирован! Подписка до {new_sub_until.date()}.")
+    # остальной код выше...
+
+if __name__ == "__main__":
+    print("🔄 Бот запускается...")
+    bot.infinity_polling()
