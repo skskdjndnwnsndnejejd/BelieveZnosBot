@@ -8,12 +8,11 @@ import smtplib
 from email.message import EmailMessage
 
 API_TOKEN = '8405903813:AAEcF7nEldg6QewRtaKKwrFVjIe6ZoUt9kg'
-
 bot = telebot.TeleBot(API_TOKEN)
 
 # --- DATABASE ---
-conn = sqlite3.connect('znoz_users.db', check_same_thread=False)
-cursor = conn.cursor()
+db = sqlite3.connect('znoz_users.db', check_same_thread=False)
+cursor = db.cursor()
 
 cursor.execute('''
 CREATE TABLE IF NOT EXISTS users (
@@ -44,31 +43,24 @@ PROMO_CODES = {
     "hello":         ("daily", None, 999999, 1)
 }
 
-# Добавляем множество одноразовых навсегда промокодов
 for i in range(1, 51):
     code = f"forever{i:02}"
     PROMO_CODES[code] = ("permanent", None, 1, 9999)
 
 for code, (ptype, expires, activations, days) in PROMO_CODES.items():
     cursor.execute("INSERT OR IGNORE INTO promo VALUES (?, ?, ?, ?, ?)", (code, ptype, expires, activations, days))
-conn.commit()
+db.commit()
 
 main_kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
 main_kb.row("Жалоба", "Промо")
 main_kb.row("Подписка", "Задания")
 
-TO_EMAILS = [
-    "support@telegram.org",
-    "abuse@telegram.org",
-    "dmca@telegram.org"
-]
-
+TO_EMAILS = ["support@telegram.org", "abuse@telegram.org", "dmca@telegram.org"]
 SUBJECTS = [
     "Нарушение условий Telegram",
     "Жалоба на пользователя",
     "Запрос на проверку аккаунта"
 ]
-
 BODIES = [
     "Здравствуйте, пользователь {target} нарушает правила. Прошу принять меры.",
     "Пользователь {target} распространяет запрещённый контент. Прошу разобраться.",
@@ -76,17 +68,11 @@ BODIES = [
 ]
 
 ACCOUNTS = [
-    {"email" : abdusamat414@gmail.com", "29082010ZNOZ": ""},
-    {"email": abdusamat424@gmail.com", "29082010ZNOZ": ""},
-    {"email": adadazx55@gmail.com", "29082010SNOS": ""},
-    {"email": "reportmailhost@gmail.com", "password": ""},
-    {"email": "autonoreplygov@gmail.com", "password": ""},
-    {"email": "casesdepartmentuk@gmail.com", "password": ""},
-    {"email": "civilreportsdept@gmail.com", "password": ""},
-    {"email": "teleadminalert@gmail.com", "password": ""},
+    {"email": "abdusamat414@gmail.com", "password": "29082010ZNOZ"},
+    {"email": "abdusamat424@gmail.com", "password": "29082010ZNOZ"},
+    {"email": "adadazx55@gmail.com", "password": "29082010SNOS"}
 ]
 
-# Жалобы
 complaints = {}
 
 def send_email(from_email, password, to_email, subject, body):
@@ -117,8 +103,8 @@ def start_msg(msg):
 
 @bot.message_handler(func=lambda msg: msg.text == "Жалоба")
 def complaint_step1(msg):
-    cursor.execute("SELECT sub_until FROM users WHERE user_id = ?", (msg.from_user.id,))
-    row = cursor.fetchone()
+    with db:
+        row = db.execute("SELECT sub_until FROM users WHERE user_id = ?", (msg.from_user.id,)).fetchone()
     if row and datetime.fromisoformat(row[0]) >= datetime.now():
         complaints[msg.from_user.id] = {"step": 1}
         bot.send_message(msg.chat.id, "✉️ Введите имя пользователя:")
@@ -151,7 +137,7 @@ def subscription(msg):
 @bot.callback_query_handler(func=lambda call: call.data.startswith("sub_"))
 def handle_sub_choice(call):
     bot.answer_callback_query(call.id)
-    bot.send_message(call.message.chat.id, "💵 Оплата: @ownbelieve для покупки подписки.")
+    bot.send_message(call.message.chat.id, "💵 Оплата: @xakepzn0z для покупки подписки.")
 
 @bot.message_handler(func=lambda msg: msg.text == "Задания")
 def tasks(msg):
@@ -164,45 +150,41 @@ def promo_code_handler(msg):
 
 def apply_promo(msg):
     code = msg.text.strip()
-    cursor.execute("SELECT * FROM promo WHERE code = ?", (code,))
-    promo = cursor.fetchone()
+    with db:
+        promo = db.execute("SELECT * FROM promo WHERE code = ?", (code,)).fetchone()
     if not promo:
         bot.send_message(msg.chat.id, "❌ Промокод не найден.")
         return
 
     promo_type, expires_at, activations, duration_days = promo[1:]
-
     if expires_at and datetime.fromisoformat(expires_at) < datetime.now():
         bot.send_message(msg.chat.id, "⏰ Срок действия промокода истёк.")
         return
 
-    cursor.execute("SELECT used_promo_types FROM users WHERE user_id = ?", (msg.from_user.id,))
-    row = cursor.fetchone()
+    with db:
+        row = db.execute("SELECT used_promo_types FROM users WHERE user_id = ?", (msg.from_user.id,)).fetchone()
     used_types = row[0].split(',') if row and row[0] else []
-
     if promo_type in used_types:
         bot.send_message(msg.chat.id, "⚠️ Вы уже использовали промокод этого типа.")
         return
 
-    cursor.execute("SELECT sub_until FROM users WHERE user_id = ?", (msg.from_user.id,))
-    row = cursor.fetchone()
+    with db:
+        row = db.execute("SELECT sub_until FROM users WHERE user_id = ?", (msg.from_user.id,)).fetchone()
     now = datetime.now()
     sub_until = datetime.fromisoformat(row[0]) if row and row[0] else now
     new_sub_until = max(sub_until, now) + timedelta(days=duration_days)
 
-    if not row:
-        cursor.execute("INSERT INTO users (user_id, sub_until, used_promo_types) VALUES (?, ?, ?)",
+    with db:
+        if not row:
+            db.execute("INSERT INTO users (user_id, sub_until, used_promo_types) VALUES (?, ?, ?)",
                        (msg.from_user.id, new_sub_until.isoformat(), promo_type))
-    else:
-        used_types.append(promo_type)
-        cursor.execute("UPDATE users SET sub_until = ?, used_promo_types = ? WHERE user_id = ?",
+        else:
+            used_types.append(promo_type)
+            db.execute("UPDATE users SET sub_until = ?, used_promo_types = ? WHERE user_id = ?",
                        (new_sub_until.isoformat(), ','.join(used_types), msg.from_user.id))
-
-    cursor.execute("UPDATE promo SET activations = activations - 1 WHERE code = ?", (code,))
-    conn.commit()
+        db.execute("UPDATE promo SET activations = activations - 1 WHERE code = ?", (code,))
     bot.send_message(msg.chat.id, f"✅ Промокод активирован! Подписка до {new_sub_until.date()}.")
-    # остальной код выше...
 
-if __name__ == "__main__":
-    print("🔄 Бот запускается...")
-    bot.infinity_polling()
+# --- INFINITE LOOP TO KEEP ALIVE IN PYDROID ---
+print("Бот запущен. Ожидает сообщения...")
+bot.infinity_polling()
